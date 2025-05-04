@@ -1,166 +1,167 @@
 import pandas as pd
 import nltk
-nltk.download('stopwords')
 nltk.download('punkt')
 nltk.download('wordnet')
-nltk.download('omw-1.4')
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
-from nltk.corpus import stopwords
 from sklearn.model_selection import train_test_split
-import re;
+import re
 import numpy as np
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from keras.models import Sequential
-from keras.layers import Embedding, LSTM, Dense,Input,GlobalMaxPooling1D,Dropout
+from keras.layers import Embedding, LSTM, Dense, Input, GlobalMaxPooling1D, Dropout
 from tensorflow.keras.models import Model
-from keras import optimizers
 from tensorflow.keras.optimizers import Adam
 from sklearn.preprocessing import LabelEncoder
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
+from sklearn.utils import class_weight
 
 
+# Veri setlerini yükle
 trueNews = pd.read_csv('dataset/True.csv')
 fakeNews = pd.read_csv('dataset/Fake.csv')
 
+# Etiketle
 fakeNews['label'] = 0
 trueNews['label'] = 1
 
-trueNews.drop(columns=["title","date","subject"],inplace=True)
-fakeNews.drop(columns=["title","date","subject"],inplace=True)
+# Gereksiz sütunları kaldır
+trueNews.drop(columns=["title", "date", "subject"], inplace=True)
+fakeNews.drop(columns=["title", "date", "subject"], inplace=True)
 
-
-# Combine them together
+# Veri setlerini birleştir
 data = pd.concat([trueNews, fakeNews], ignore_index=True)
 
-print(data.isnull().sum()) # we run the code to check if there are any null values in the dataset
-# there is no null values in the dataset, so we don't need to remove them
+# Null ve duplicate kontrolü
+data.drop_duplicates(inplace=True)
 
 
-print(data.duplicated().sum()) # we run the code to check if there are any duplicate values in the dataset
-# there is duplicate values in the dataset, so we need to remove them
-data.drop_duplicates(inplace=True) # remove duplicate values in the dataset
-
-# Clean the text data
+# Metin ön işleme
 def process_text(text):
-    text = re.sub(r'\s+', ' ', text, flags=re.I) # Remove extra white space from text
-
-    text = re.sub(r'\W', ' ', str(text)) # Remove all the special characters from text
-
-    text = re.sub(r'\s+[a-zA-Z]\s+', ' ', text) # Remove all single characters from text
-
-    text = re.sub(r'[^a-zA-Z\s]', '', text) # Remove any character that isn't alphabetical
-
     text = text.lower()
-
+    text = re.sub(r'http\S+|www.\S+', '', text)
+    text = re.sub(r'\d+', '', text)
+    text = re.sub(r'[^\w\s]', '', text)
     words = word_tokenize(text)
-
     lemmatizer = WordNetLemmatizer()
-    words = [lemmatizer.lemmatize(word) for word in words]
+    words = [lemmatizer.lemmatize(word) for word in words if len(word) > 1]
+    return " ".join(words)
 
-    stop_words = set(stopwords.words("english"))
-    Words = [word for word in words if word not in stop_words]
 
-    Words = [word for word in Words if len(word) > 3]
+# Metinleri temizle
+data['cleaned_text'] = data['text'].apply(process_text)
 
-    indices = np.unique(Words, return_index=True)[1]
-    cleaned_text = np.array(Words)[np.sort(indices)].tolist()
+# Veri ve etiket ayır
+X = data['cleaned_text']
+y = data['label']
 
-    return cleaned_text
+# Eğitim ve test ayrımı
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-X=data.drop('label',axis=1)
-Y=data.label
-
-# Apply cleaning to the text
-# data['text'] = data['text'].apply(process_text)
-texts = list(data['text'])
-cleaned_texts = [process_text(text) for text in texts]
-
-# # Split the data into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(cleaned_texts, Y, test_size=0.2, random_state=42)
-
+# Tokenizer: tüm veride eğit
 tokenizer = Tokenizer()
-tokenizer.fit_on_texts(X_train)
-word_idx = tokenizer.word_index  # Corrected syntax for accessing word index
-v = len(word_idx)
-print("the size of vocab =", v)  # Corrected spacing
-X_train = tokenizer.texts_to_sequences(X_train)
-X_test = tokenizer.texts_to_sequences(X_test)
+tokenizer.fit_on_texts(X)
 
+vocab_size = len(tokenizer.word_index)
+print("Vocabulary size:", vocab_size)
+
+# Metinleri dizilere çevir
+X_train_seq = tokenizer.texts_to_sequences(X_train)
+X_test_seq = tokenizer.texts_to_sequences(X_test)
+
+# Padding
 maxlen = 150
-X_train = pad_sequences(X_train,maxlen=maxlen)
-X_test = pad_sequences(X_test,maxlen=maxlen)
+X_train_pad = pad_sequences(X_train_seq, maxlen=maxlen)
+X_test_pad = pad_sequences(X_test_seq, maxlen=maxlen)
 
-print(Y.value_counts())
+# Sınıf ağırlıkları
+class_weights = class_weight.compute_class_weight(
+    class_weight='balanced',
+    classes=np.unique(y_train),
+    y=y_train
+)
+class_weights = dict(enumerate(class_weights))
 
-inputt=Input(shape=(maxlen,))
-learning_rate = 0.0001
-x=Embedding(v+1,100)(inputt)
-x = Dropout(0.5)(x)
-x = LSTM(150,return_sequences=True)(x)
-x = Dropout(0.5)(x)
+# Model mimarisi
+input_layer = Input(shape=(maxlen,))
+x = Embedding(vocab_size + 1, 100)(input_layer)
+x = Dropout(0.3)(x)
+x = LSTM(100, return_sequences=True)(x)
+x = Dropout(0.3)(x)
 x = GlobalMaxPooling1D()(x)
 x = Dense(64, activation='relu')(x)
-x = Dropout(0.5)(x)
-x = Dense(2, activation='softmax')(x)
+x = Dropout(0.3)(x)
+output = Dense(1, activation='sigmoid')(x)
 
-model = Model(inputt, x)
+model = Model(inputs=input_layer, outputs=output)
+model.compile(optimizer=Adam(learning_rate=0.0001), loss='binary_crossentropy', metrics=['accuracy'])
 
-# Define optimizer with specified learning rate
-optimizer = Adam(learning_rate=learning_rate)
+# Eğitimi başlat
+history = model.fit(
+    X_train_pad, y_train,
+    epochs=10,
+    validation_data=(X_test_pad, y_test),
+    class_weight=class_weights
+)
 
-model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
-
-label_encoder = LabelEncoder()
-y_train_encoded = label_encoder.fit_transform(y_train)
-y_test_encoded = label_encoder.transform(y_test)
-
-
-y_train_one_hot = tf.keras.utils.to_categorical(y_train_encoded)
-y_test_one_hot = tf.keras.utils.to_categorical(y_test_encoded)
-
-
-
-history = model.fit(X_train, y_train_one_hot, epochs=15, validation_data=(X_test, y_test_one_hot))
-
-# Plot training & validation accuracy values
+# Eğitim grafikleri
 plt.plot(history.history['accuracy'])
 plt.plot(history.history['val_accuracy'])
-plt.title('Model accuracy')
+plt.title('Model Accuracy')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
 plt.legend(['Train', 'Test'], loc='upper left')
 plt.show()
 
-# Plot training & validation loss values
 plt.plot(history.history['loss'])
 plt.plot(history.history['val_loss'])
-plt.title('Model loss')
+plt.title('Model Loss')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.legend(['Train', 'Test'], loc='upper left')
 plt.show()
 
-
-# Evaluate the model on the test data
-loss, accuracy = model.evaluate(X_test, y_test_one_hot)
-
+# Test verisinde değerlendirme
+loss, accuracy = model.evaluate(X_test_pad, y_test)
 print("Test Loss:", loss)
 print("Test Accuracy:", accuracy)
 
-y_pred_probs = model.predict(X_test)
-y_pred_labels = np.argmax(y_pred_probs, axis=1)
-y_true_labels = np.argmax(y_test_one_hot, axis=1)
-conf_matrix = confusion_matrix(y_true_labels, y_pred_labels)
+# Confusion Matrix
+y_pred_probs = model.predict(X_test_pad)
+y_pred = (y_pred_probs > 0.5).astype(int).flatten()
+conf_matrix = confusion_matrix(y_test, y_pred)
+
 plt.figure(figsize=(8, 6))
-sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', 
-            xticklabels=['Fake', 'Real'], 
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Fake', 'Real'],
             yticklabels=['Fake', 'Real'])
 plt.xlabel('Predicted')
 plt.ylabel('True')
 plt.title('Confusion Matrix')
 plt.show()
+
+
+# Tahmin fonksiyonu
+def predict_news(news_text):
+    cleaned = process_text(news_text)
+    seq = tokenizer.texts_to_sequences([cleaned])
+    padded = pad_sequences(seq, maxlen=maxlen)
+    prediction = model.predict(padded)[0][0]
+
+    if prediction > 0.5:
+        print("\n🟩 Tahmin: GERÇEK HABER (Real)")
+    else:
+        print("\n🟥 Tahmin: SAHTE HABER (Fake)")
+
+
+# Kullanıcıdan giriş alma
+while True:
+    user_input = input("\nBir haber metni girin (çıkmak için 'q' yazın):\n> ")
+    if user_input.lower() == 'q':
+        print("Program sonlandırıldı.")
+        break
+    predict_news(user_input)
