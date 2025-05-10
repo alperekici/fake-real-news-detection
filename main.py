@@ -29,14 +29,14 @@ fakeNews = pd.read_csv('dataset/Fake.csv')
 fakeNews['label'] = 0
 trueNews['label'] = 1
 
-# Gereksiz sütunları kaldır
+# Remove unnecessary columns
 trueNews.drop(columns=["title", "date", "subject"], inplace=True)
 fakeNews.drop(columns=["title", "date", "subject"], inplace=True)
 
-# Veri setlerini birleştir
+# Merge datasets
 data = pd.concat([trueNews, fakeNews], ignore_index=True)
 
-# Null ve duplicate kontrolü
+# Null and Duplicate checking
 data.drop_duplicates(inplace=True)
 
 
